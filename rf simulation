@@ -21,37 +21,49 @@ distance = 1000; % Distance in meters
 c = 3e8; % Speed of light
 f = 2.5e9; % Frequency of LTE signal
 FSPL = (4*pi*distance*f/c)^2; % Free space path loss
-transmitted_signal = filtered_waveform / FSPL;
 
-% Add AWGN noise
+% Normalize transmitted signal to prevent too small amplitude
+transmitted_signal = filtered_waveform;  % Don't divide by FSPL for now, handle after
+
+% Add AWGN noise (using custom function)
 SNR = 20; % Signal-to-noise ratio in dB
-received_signal = awgn(transmitted_signal, SNR, 'measured');
+received_signal = add_awgn_noise(transmitted_signal, SNR);
 
 % RF Demodulation (mixing with local oscillator)
-f_LO = 2.5e9; % Local oscillator frequency
+f_LO = f;  % Ensure that the LO frequency matches the signal's frequency
 t = (0:N-1)*T; % Time vector
 local_oscillator = exp(1j*2*pi*f_LO*t');  % Complex exponential for mixing
 
-demodulated_signal = real(received_signal .* local_oscillator);
+% Demodulate signal by multiplying with the local oscillator
+demodulated_signal = real(received_signal .* conj(local_oscillator));  % Correct mixing
 
 % ADC Simulation (Quantization)
 ADC_bits = 10; % 10-bit ADC
 quantization_levels = 2^ADC_bits;
 adc_output = round(demodulated_signal * (quantization_levels/2)) / (quantization_levels/2);
 
-% DC Offset Cancellation (High-pass filter to remove DC component)
-hp_filter = designfilt('highpassiir','FilterOrder', 8, 'PassbandFrequency', 0.1, 'PassbandRipple', 0.2, 'SampleRate', Fs);
-final_output = filtfilt(hp_filter, adc_output);
+% DC Offset Cancellation (Modify the high-pass filter to preserve signal)
+hp_filter = designfilt('highpassiir', 'FilterOrder', 2, 'PassbandFrequency', 0.1, ...
+    'PassbandRipple', 0.1, 'SampleRate', Fs);  % Adjust cutoff frequency
+final_output = filtfilt(hp_filter, adc_output); % Apply zero-phase filtering
 
-% Plot results
+% Plot results to visualize each stage
 figure;
-subplot(3,1,1); plot(lteWaveform); title('Original LTE Waveform'); grid on;
-subplot(3,1,2); plot(real(received_signal)); title('Received Signal with Noise'); grid on;
-subplot(3,1,3); plot(final_output); title('Final Output after DC Offset Cancellation'); grid on;
+subplot(4,1,1); plot(lteWaveform); title('Original LTE Waveform'); grid on;
+subplot(4,1,2); plot(real(received_signal)); title('Received Signal with Noise'); grid on;
+subplot(4,1,3); plot(real(demodulated_signal)); title('Demodulated Signal'); grid on;
+subplot(4,1,4); plot(final_output); title('Final Output after DC Offset Cancellation'); grid on;
 
 % Error Vector Magnitude (EVM) Calculation
-ideal_signal = lteWaveform; % Use original signal as reference
-error_signal = final_output - ideal_signal(1:length(final_output));
-evm_rms = rms(error_signal) / rms(ideal_signal) * 100; % EVM in percentage
+ideal_signal = transmitted_signal;  % Use the transmitted signal as the ideal reference
+error_signal = received_signal(1:length(ideal_signal)) - ideal_signal;  % Error between transmitted and received
+evm_rms = rms(error_signal) / rms(ideal_signal) * 100;  % EVM in percentage
 fprintf('EVM (RMS) = %.2f%%\n', evm_rms);
 
+% Function to add AWGN noise to a signal
+function noisy_signal = add_awgn_noise(signal, SNR_dB)
+    sig_power = mean(abs(signal).^2);  % Calculate power of the original signal
+    noise_power = sig_power / (10^(SNR_dB/10));  % Calculate noise power from SNR
+    noise = sqrt(noise_power) * randn(size(signal));  % Add Gaussian noise
+    noisy_signal = signal + noise;  % Combine signal and noise
+end
